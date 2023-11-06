@@ -1,0 +1,567 @@
+---
+title: "Project on Prediction Of Bank Customer Attrition"
+author: "Praveena_Munnam_vxw648
+date: "2023-04-08"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r, include=FALSE}
+library(dplyr)
+library(ggplot2)
+library(e1071)
+library(partykit)
+library(rsample)
+library(caret)
+library(ROCR)
+library(GGally)
+library(tidyverse)
+library(survival)
+library(corrplot)
+library(car)
+library(MASS)
+library(e1071) 
+library(ISLR) 
+library(rpart)
+library(rpart.plot)
+library(randomForest)
+```
+
+
+## Reading the dataset
+```{r}
+bank = read.csv("churn.csv", header = TRUE, stringsAsFactors = T)
+```
+
+## Structure of the dataset
+
+```{r}
+str(bank)
+```
+## Checking whether the data set have the null values
+
+```{r}
+colSums(is.na(bank))
+```
+
+## Data cleaning
+
+```{r}
+bank$Exited = as_factor(bank$Exited)
+bank$HasCrCard = as_factor(bank$HasCrCard)
+bank$IsActiveMember = as_factor(bank$IsActiveMember)
+```
+
+
+## Exploratory data analysis
+
+## Gender Variable
+
+```{r}
+ggplot(data = bank) + 
+  geom_bar(mapping = aes(x = Exited, fill = Gender), position = "dodge") +
+  scale_fill_manual(values = c("palevioletred", "cadetblue"))
+```
+
+
+# Bank products
+## HasCrCard
+```{r}
+ggplot(data = bank,
+       aes(x = HasCrCard,
+           fill = Exited)) +
+  geom_bar() +
+  scale_x_discrete(breaks = c(0,1),
+                   labels = c("Not Having the Card",
+                              "Having the Card"))+
+ scale_fill_manual(values = c("palevioletred", "cadetblue"))
+```
+## IsActiveMember
+
+```{r}
+ggplot(data = bank,
+       aes(x = IsActiveMember,
+           fill = Exited)) +
+  geom_bar() +
+  scale_x_discrete(breaks = c(0,1),
+                   labels = c("Not an Active Member",
+                              "Active Member"))+
+ scale_fill_manual(values = c("palevioletred", "cadetblue"))
+```
+## No of products
+```{r}
+ggplot(data = bank,
+       aes(x = NumOfProducts,
+           fill = Exited)) +
+  geom_bar()+
+ scale_fill_manual(values = c("palevioletred", "cadetblue"))
+```
+## Tenure
+
+```{r}
+ggplot(data = bank,
+       aes(x = Tenure,
+           fill = Exited)) +
+  geom_bar()+
+ scale_fill_manual(values = c("palevioletred", "cadetblue"))
+```
+
+## Continous variable 
+
+```{r}
+bank[, names(bank) %in% c('Age', 'Balance', 'CreditScore', 'EstimatedSalary')] %>%
+  gather() %>%
+  ggplot(aes(value, fill = key)) +
+    facet_wrap(~ key, scales = "free") +
+    geom_boxplot() +
+    theme(axis.text.x = element_text(size = 7, angle=90), axis.text.y = element_text(size = 7))
+
+```
+
+
+## Exited variable
+
+```{r}
+churn <- ggplot(bank, aes(x = factor(ifelse(Exited == 0, "Not Exited", "Exited")))) +
+  geom_bar() +
+  stat_count(geom = "text", colour = "pink", aes(label = paste("N =", after_stat(count))), 
+             position = position_stack(vjust = 0.5)) +
+  xlab("Choice") + ylab("Count")
+churn
+```
+## Exited in percentage
+```{r}
+churn1 <- bank %>% 
+  group_by(Exited) %>% 
+  summarize(count = n()) %>% 
+  mutate(pct = count/sum(count))
+
+ggplot(churn1, aes(x = factor(Exited), y = pct, fill = factor(Exited))) + 
+  geom_bar(stat = "identity", show.legend = FALSE) + 
+  geom_text(aes(label = scales::percent(pct)), position = position_stack(vjust = 0.5)) +
+  scale_y_continuous(labels = scales::percent) +
+ scale_fill_manual(values = c("palevioletred", "cadetblue")) +
+  ggtitle("Percentage of Customers Who Exited and Not Exited their Accounts") +
+  xlab("Exited") +
+  ylab("Percent of Customers") + 
+  theme_minimal()
+```
+
+## Check for correlation
+```{r}
+bank_num = select_if(bank, is.numeric)
+C = cor(bank_num)
+```
+
+
+
+# Plot the correlation matrix
+```{r}
+corrplot(C, method = "number")
+```
+
+## Selecting the variables
+
+### Removing variables which are irrelavant
+
+```{r}
+bank = dplyr::select(bank,-RowNumber)
+bank = dplyr::select(bank,-CustomerId)
+bank = dplyr::select(bank,-Surname)
+```
+
+
+```{r}
+names(bank)
+```
+
+```{r}
+bank$Exited <- as_factor(make.names(as.character(bank$Exited)))
+bank$HasCrCard <- as_factor(make.names(as.character(bank$HasCrCard)))
+bank$IsActiveMember <- as_factor(make.names(as.character(bank$IsActiveMember)))
+```
+
+```{r}
+levels(bank$HasCrCard)
+```
+## Training and Testing
+
+```{r}
+set.seed(444)
+split <- sample(nrow(bank), nrow(bank)*0.8)
+banktrain <- bank[split,]
+banktest <- bank[-split,]
+```
+
+
+```{r}
+table(banktrain$Exited)
+```
+
+### DOWNSAMPLE
+
+```{r}
+traindown <- downSample(x = subset(banktrain, select = -Exited),
+                        y = banktrain$Exited,
+                        list = F,
+                        yname = "Exited")
+
+table(traindown$Exited)
+```
+```{r}
+levels(banktrain$Exited)
+```
+
+
+## Building the models
+
+
+```{r}
+set.seed(100)
+ctrl <- trainControl(method = "LGOCV",
+                     summaryFunction = twoClassSummary,
+                     classProbs = TRUE,
+                     savePredictions = TRUE)
+```
+
+## Logistic Regression
+
+```{r}
+ set.seed(4)
+ logisticTune <-train(Exited ~ ., 
+                 data = traindown,
+ method = "glm",
+ metric = "ROC",
+ trControl = ctrl)
+ logisticTune 
+```
+
+```{r}
+pred_log <- predict(logisticTune, newdata= banktest, type = "prob")[, 1]
+confusionmatrix.log = confusionMatrix(data = predict(logisticTune, banktest), reference = banktest$Exited)
+confusionmatrix.log
+```
+
+```{r}
+set.seed(15)
+logpred <- prediction(pred_log, banktest$Exited)
+logperf <- performance(logpred, "tpr", "fpr")
+plot(logperf, colorize = TRUE)
+abline(a = 0, b = 1)
+auc_log <- round(as.numeric(performance(logpred, "auc")@y.values), 2)
+legend(0.8, 0.2, paste0("AUC = ", auc_log),  col = "red", cex = 1)
+```
+
+
+
+## Flexible Discriminate Analysis
+
+```{r}
+ set.seed(476)
+ FDATune <- train(Exited ~ ., 
+                 data = traindown,
+ method = "fda",
+ preProc = c('center', 'scale'),
+ metric = "ROC",
+ trControl = ctrl)
+ FDATune
+```
+```{r}
+plot(FDATune)
+```
+
+```{r}
+predclass_FDA = predict(FDATune, newdata = banktest, type = "prob")[,1]
+confusionmatrix.fda = confusionMatrix(data = predict(FDATune, banktest), reference = banktest$Exited)
+confusionmatrix.fda
+```
+
+```{r}
+Pred_val3 <- prediction(predclass_FDA, banktest$Exited)
+ROCperf3 <- performance(Pred_val3, "tpr", "fpr")
+plot(ROCperf3, colorize = TRUE, col = "red")
+abline(0, 1, lty = 2)
+auc_fda <- round(as.numeric(performance(Pred_val3, "auc")@y.values[[1]]), 2)
+text(0.8, 0.2, paste0("AUC = ", auc_fda), col = "black", cex = 1)
+```
+
+## Penalized Models
+```{r}
+glmnGrid <- expand.grid(alpha = c(0, .1, .2, .4, .6, .8, 1),
+                        lambda = seq(.01, .2, length = 40))
+set.seed(476)
+glmnTune = train(Exited ~ ., 
+                 data = traindown,
+                 method = "glmnet",
+                 tuneGrid = glmnGrid,
+                 metric = "ROC",
+                 trControl = ctrl)
+```
+
+```{r}
+plot(glmnTune)
+```
+
+
+
+```{r}
+pred_glmn <- predict(glmnTune, newdata= banktest, type = "prob")[, 1]
+confusionmatrix.glmn = confusionMatrix(data = predict(glmnTune, banktest), reference = banktest$Exited)
+confusionmatrix.glmn
+```
+
+```{r}
+set.seed(1)
+Pred_val1 <- prediction(pred_glmn, banktest$Exited) 
+ROCperf1 <- performance(Pred_val1, "tpr", "fpr")
+plot(ROCperf1, colorize = TRUE)
+abline(0, 1, lty = 2)
+auc_glmn <- round(as.numeric(performance(Pred_val1, "auc")@y.values[[1]]), 2)
+text(0.8, 0.2, paste0("AUC = ", auc_glmn), col = "black", cex = 1)
+```
+
+## KNN model
+
+```{r}
+library(caret)
+set.seed(123)
+modelknn <- train(Exited ~ ., 
+                  data = traindown, 
+                  method = "knn",
+                  preProcess = c("center", "scale"), 
+                  tuneLength = 10,
+                  trControl = ctrl)
+print(modelknn)
+```
+
+```{r}
+predknn <- predict(modelknn, newdata = banktest, type = "raw")
+confusionmatrix.knn <- confusionMatrix(predknn, banktest$Exited)
+confusionmatrix.knn
+```
+
+```{r}
+set.seed(1)
+pred_knn <- predict(modelknn, newdata= banktest, type = "prob")[, 1]
+Pred_val5 <- prediction(pred_knn, banktest$Exited) 
+ROCperf5 <- performance(Pred_val5, "tpr", "fpr")
+plot(ROCperf5, colorize = TRUE, xlab = "False Positive Rate", ylab = "True Positive Rate", main = "ROC Curve for KNN Model")
+abline(0, 1, lty = 2)
+auc_knn <- round(as.numeric(performance(Pred_val5, "auc")@y.values[[1]]), 2)
+text(0.8, 0.2, paste0("AUC = ", auc_knn), col = "Black", cex = 1)
+```
+
+
+## Naïve Bayes
+
+```{r, include=FALSE}
+ set.seed(476)
+ NBTune <- train(Exited ~ ., 
+                 data = traindown,
+ method = "nb",
+ preProc = c('center', 'scale'),
+ metric = "ROC",
+ trControl = ctrl)
+```
+```{r}
+NBTune
+```
+
+```{r}
+pred_NB <- predict(NBTune, newdata= banktest, type = "prob")[, 1]
+confusionmatrix.NB = confusionMatrix(data = predict(NBTune, banktest), reference = banktest$Exited)
+confusionmatrix.NB
+```
+
+```{r}
+set.seed(1)
+Pred_val8 <- prediction(pred_NB, banktest$Exited) 
+ROCperf8 <- performance(Pred_val8, "tpr", "fpr")
+plot(ROCperf8, colorize = TRUE)
+abline(0, 1, lty = 2)
+auc_NB <- round(as.numeric(performance(Pred_val8, "auc")@y.values[[1]]), 2)
+text(0.8, 0.2, paste0("AUC = ", auc_NB), col = "black", cex = 1)
+```
+
+## Bagging 
+
+
+```{r}
+set.seed(476)
+treebagTune = train(Exited ~ ., 
+                data = traindown,
+                     method = "treebag",
+                     nbagg = 50,
+                     trControl = ctrl)
+
+treebagTune
+```
+```{r}
+pred_bg <- predict(treebagTune, newdata= banktest, type = "prob")[, 1]
+confusionmatrix.bg = confusionMatrix(data = predict(treebagTune, banktest), reference = banktest$Exited)
+confusionmatrix.bg
+```
+
+```{r}
+set.seed(1)
+Pred_val11 <- prediction(pred_bg, banktest$Exited) 
+ROCperf11 <- performance(Pred_val11, "tpr", "fpr")
+plot(ROCperf11, colorize = TRUE)
+abline(0, 1, lty = 2)
+auc_bg <- round(as.numeric(performance(Pred_val11, "auc")@y.values[[1]]), 2)
+text(0.8, 0.2, paste0("AUC = ", auc_bg), col = "black", cex = 1)
+```
+
+
+## Random forest
+```{r}
+mtryGrid <- data.frame(mtry = 1:10) #since we only have 10 predictors
+
+### Tune the model using cross-validation
+set.seed(476)
+rfTune <- train(Exited ~ ., 
+                data = traindown,
+                method = "rf",
+                tuneGrid = mtryGrid,
+                ntree = 200,
+                importance = TRUE,
+                trControl = ctrl)
+rfTune
+```
+
+```{r}
+pred_rf <- predict(rfTune, newdata= banktest, type = "prob")[, 1]
+confusionmatrix.rf1 = confusionMatrix(data = predict(rfTune, banktest), reference = banktest$Exited)
+confusionmatrix.rf1
+```
+
+```{r}
+set.seed(1)
+Pred_val9 <- prediction(pred_rf, banktest$Exited) 
+ROCperf9 <- performance(Pred_val9, "tpr", "fpr")
+plot(ROCperf9, colorize = TRUE)
+abline(0, 1, lty = 2)
+auc_rf1 <- round(as.numeric(performance(Pred_val9, "auc")@y.values[[1]]), 2)
+text(0.8, 0.2, paste0("AUC = ", auc_rf1), col = "black", cex = 1)
+```
+
+
+```{r}
+varImp(rfTune)
+```
+
+```{r}
+rf_object <- rfTune$finalModel
+var_imp <- importance(rf_object, type = 2)
+var_imp_df <- data.frame(Variables = row.names(var_imp),
+                         Importance = round(var_imp[, "MeanDecreaseGini"], 2)) %>%
+              arrange(desc(Importance))
+ggplot(var_imp_df, aes(x = reorder(Variables, Importance), y = Importance)) + 
+  geom_bar(stat = "identity", fill = "cadetblue") +
+  coord_flip() +
+  labs(title = "Variable Importance Plot", y = "Importance", x = "Predictor Variable")
+``` 
+
+
+## Boosting
+
+```{r}
+gbmGrid = expand.grid( interaction.depth = seq( 1, 7, by=2 ),
+                       n.trees = seq( 100, 1000, by=100 ),
+                       shrinkage = c(0.01, 0.1),
+                       n.minobsinnode = 10 )
+
+set.seed(476) 
+gbmTune <- train(Exited ~ ., 
+                data = traindown,
+                 method = "gbm",
+                 tuneGrid = gbmGrid,
+                 trControl = ctrl,
+                 verbose = FALSE)
+```
+```{r}
+plot(gbmTune, auto.key = list(columns = 4, lines = TRUE))
+```
+
+```{r}
+pred_bo <- predict(gbmTune, newdata= banktest, type = "prob")[, 1]
+confusionmatrix.bo = confusionMatrix(data = predict(gbmTune, banktest), reference = banktest$Exited)
+confusionmatrix.bo
+```
+
+```{r}
+set.seed(1)
+Pred_val10 <- prediction(pred_bo, banktest$Exited) 
+ROCperf10 <- performance(Pred_val10, "tpr", "fpr")
+plot(ROCperf10, colorize = TRUE)
+abline(0, 1, lty = 2)
+auc_bo <- round(as.numeric(performance(Pred_val10, "auc")@y.values[[1]]), 2)
+text(0.8, 0.2, paste0("AUC = ", auc_bo), col = "black", cex = 1)
+```
+
+
+```{r}
+pred1.accuracy =confusionmatrix.log$overall[1]
+pred3.accuracy = confusionmatrix.fda$overall[1]
+pred4.accuracy = confusionmatrix.glmn$overall[1]
+pred5.accuracy = confusionmatrix.knn$overall[1]
+pred9.accuracy = confusionmatrix.NB$overall[1]
+pred12.accuracy = confusionmatrix.bg$overall[1]
+pred10.accuracy = confusionmatrix.rf1$overall[1]
+pred11.accuracy = confusionmatrix.bo$overall[1]
+```
+
+
+
+## Model Evaluation
+```{r}
+results <- data.frame(
+  Model = c("Logistic Regression", "Flexible discriminant analysis", "Penalized Models", "K-nearest neighbors", "Naive Bayes","Bagging", "Random Forest", "Boosting"),
+  Accuracy = sprintf("%.2f", c(pred1.accuracy, pred3.accuracy, 
+                               pred4.accuracy, pred5.accuracy,pred9.accuracy,pred12.accuracy,                          pred10.accuracy,pred11.accuracy)),
+  Sensitivity = sprintf("%.2f", c(confusionmatrix.log$byClass["Sensitivity"],
+                                   confusionmatrix.fda$byClass["Sensitivity"],
+                                   confusionmatrix.glmn$byClass["Sensitivity"],
+                                   confusionmatrix.knn$byClass["Sensitivity"],
+                                  confusionmatrix.NB$byClass["Sensitivity"],
+                                  confusionmatrix.bg$byClass["Sensitivity"],
+                                  confusionmatrix.rf1$byClass["Sensitivity"],
+                                  confusionmatrix.bo$byClass["Sensitivity"])),
+  Specificity = sprintf("%.2f", c(confusionmatrix.log$byClass["Specificity"],
+                                   confusionmatrix.fda$byClass["Specificity"],
+                                   confusionmatrix.glmn$byClass["Specificity"],
+                                   confusionmatrix.knn$byClass["Specificity"],
+                                  confusionmatrix.NB$byClass["Specificity"],
+                                  confusionmatrix.bg$byClass["Specificity"],
+                                  confusionmatrix.rf1$byClass["Specificity"],
+                                  confusionmatrix.bo$byClass["Specificity"])),
+  AUC = sprintf("%.2f", c(as.numeric(performance(logpred, "auc")@y.values),
+                           as.numeric(performance(Pred_val3, "auc")@y.values[[1]]),
+                           as.numeric(performance(Pred_val1, "auc")@y.values[[1]]), 
+                           as.numeric(performance(Pred_val5, "auc")@y.values[[1]]),
+                          as.numeric(performance(Pred_val8, "auc")@y.values[[1]]),
+                          as.numeric(performance(Pred_val11, "auc")@y.values[[1]]),
+                          as.numeric(performance(Pred_val9, "auc")@y.values[[1]]),
+                          as.numeric(performance(Pred_val10, "auc")@y.values[[1]])))
+)
+
+results
+
+```
+
+
+
+
+
+#Resamples of Tranining data
+
+```{r}
+res = resamples(list(logistic = logisticTune, FDA = FDATune , Penalized = glmnTune , knn = modelknn,  NaiveBayes = NBTune, RandomForest = rfTune , Boosting = gbmTune, Bagging = treebagTune))
+dotplot(res)
+```
+
+
+
+
+
